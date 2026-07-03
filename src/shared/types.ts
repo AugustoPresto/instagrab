@@ -42,4 +42,6 @@ export type ExtensionMessage =
   | { type: "POST_INFO_RESULT"; payload: PostInfo | null }
   | { type: "DOWNLOAD_ITEMS"; payload: DownloadRequest }
   | { type: "DOWNLOAD_PROGRESS"; payload: DownloadProgress }
+  | { type: "FETCH_URL_HTML"; payload: string }
+  | { type: "FETCH_URL_HTML_RESULT"; payload: string }
   | { type: "ERROR"; payload: string };

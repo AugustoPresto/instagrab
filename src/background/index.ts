@@ -7,13 +7,26 @@ import type { DownloadRequest, ExtensionMessage } from "../shared/types";
 
 chrome.runtime.onMessage.addListener(
   (message: ExtensionMessage, _sender, sendResponse) => {
-    if (message.type !== "DOWNLOAD_ITEMS") return;
+    if (message.type === "DOWNLOAD_ITEMS") {
+      handleDownloads(message.payload).then(sendResponse).catch((err) => {
+        sendResponse({ type: "ERROR", payload: String(err) });
+      });
+      return true; // async response
+    }
 
-    handleDownloads(message.payload).then(sendResponse).catch((err) => {
-      sendResponse({ type: "ERROR", payload: String(err) });
-    });
+    if (message.type === "FETCH_URL_HTML") {
+      fetch(message.payload, { credentials: "include" })
+        .then((r) => r.text())
+        .then((html) => {
+          sendResponse({ type: "FETCH_URL_HTML_RESULT", payload: html });
+        })
+        .catch((err) => {
+          sendResponse({ type: "ERROR", payload: String(err) });
+        });
+      return true; // async response
+    }
 
-    return true; // async response
+    return false;
   }
 );
 

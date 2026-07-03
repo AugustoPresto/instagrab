@@ -41,18 +41,28 @@ chrome.runtime.onMessage.addListener(
         let postInfo = extractPostInfo(jsonScripts, currentUrl);
 
         // 2. Fallback: Fetch page HTML directly (handles client-side SPA transitions where DOM scripts are stale)
+        // 2. Fallback: Request background script to fetch page HTML (bypasses page CSP and CORS restrictions)
         if (!postInfo) {
-          const resp = await fetch(currentUrl, { credentials: "include" });
-          const htmlText = await resp.text();
+          const response = await new Promise<ExtensionMessage>((resolve) => {
+            chrome.runtime.sendMessage(
+              { type: "FETCH_URL_HTML", payload: currentUrl } as ExtensionMessage,
+              (res) => resolve(res)
+            );
+          });
 
-          const scriptPattern = /<script\s+type="application\/json"[^>]*>([\s\S]*?)<\/script>/g;
-          const fetchedScripts: string[] = [];
-          let match;
-          while ((match = scriptPattern.exec(htmlText)) !== null) {
-            fetchedScripts.push(match[1]);
+          if (response?.type === "FETCH_URL_HTML_RESULT" && response.payload) {
+            const htmlText = response.payload;
+            const scriptPattern = /<script\s+type="application\/json"[^>]*>([\s\S]*?)<\/script>/g;
+            const fetchedScripts: string[] = [];
+            let match;
+            while ((match = scriptPattern.exec(htmlText)) !== null) {
+              fetchedScripts.push(match[1]);
+            }
+
+            postInfo = extractPostInfo(fetchedScripts, currentUrl);
+          } else if (response?.type === "ERROR") {
+            throw new Error(response.payload);
           }
-
-          postInfo = extractPostInfo(fetchedScripts, currentUrl);
         }
 
         cachedPostInfo = postInfo;
