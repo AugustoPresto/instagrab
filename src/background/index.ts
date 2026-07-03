@@ -16,7 +16,15 @@ chrome.runtime.onMessage.addListener(
 
     if (message.type === "FETCH_URL_HTML") {
       fetch(message.payload, { credentials: "include" })
-        .then((r) => r.text())
+        .then(async (r) => {
+          if (!r.ok) {
+            throw new Error(`HTTP error! status: ${r.status}`);
+          }
+          if (r.url.includes("accounts/login")) {
+            throw new Error("Instagram redirected the request to login. Please make sure you are logged in.");
+          }
+          return r.text();
+        })
         .then((html) => {
           sendResponse({ type: "FETCH_URL_HTML_RESULT", payload: html });
         })

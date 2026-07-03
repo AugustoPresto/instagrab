@@ -18,17 +18,44 @@ function isPostUrl(url: string): boolean {
   }
 }
 
-/**
- * Scrapes media elements from the active article DOM.
- * Works as a robust fallback if JSON scripts cannot be parsed or fetched.
- */
 function extractFromDOM(postUrl: string): PostInfo | null {
-  const article = document.querySelector("article");
-  if (!article) return null;
+  // Extract shortcode
+  const shortcode =
+    postUrl.split("/p/")[1]?.split("/")[0] ||
+    postUrl.split("/reel/")[1]?.split("/")[0] ||
+    postUrl.split("/tv/")[1]?.split("/")[0] ||
+    "unknown";
+
+  // Find the correct container containing our shortcode
+  let container: Element | null = null;
+  const articles = Array.from(document.querySelectorAll("article"));
+  
+  if (articles.length === 1) {
+    container = articles[0];
+  } else if (articles.length > 1) {
+    // Find the article that has a link containing the shortcode
+    container = articles.find((art) => {
+      const links = Array.from(art.querySelectorAll("a"));
+      return links.some((link) => {
+        const href = link.getAttribute("href");
+        return href && href.includes(shortcode);
+      });
+    }) || null;
+  }
+
+  // Fallback to dialog modal
+  if (!container) {
+    container = document.querySelector('div[role="dialog"]');
+  }
+
+  // Final fallback to body
+  if (!container) {
+    container = document.body;
+  }
 
   // Extract author
   let author = "unknown";
-  const header = article.querySelector("header");
+  const header = container.querySelector("header");
   if (header) {
     const headerLinks = Array.from(header.querySelectorAll("a"));
     for (const link of headerLinks) {
@@ -43,7 +70,7 @@ function extractFromDOM(postUrl: string): PostInfo | null {
 
   // Fallback author check
   if (author === "unknown") {
-    const links = Array.from(article.querySelectorAll("a"));
+    const links = Array.from(container.querySelectorAll("a"));
     for (const link of links) {
       const href = link.getAttribute("href");
       if (href && /^\/[a-zA-Z0-9_\-\.]+\/$/.test(href)) {
@@ -56,18 +83,15 @@ function extractFromDOM(postUrl: string): PostInfo | null {
     }
   }
 
-  // Extract shortcode
-  const shortcode =
-    postUrl.split("/p/")[1]?.split("/")[0] ||
-    postUrl.split("/reel/")[1]?.split("/")[0] ||
-    postUrl.split("/tv/")[1]?.split("/")[0] ||
-    "unknown";
-
   const mediaItems: MediaItem[] = [];
 
   // 1. Extract Videos
-  const videos = Array.from(article.querySelectorAll("video"));
+  const videos = Array.from(container.querySelectorAll("video"));
   videos.forEach((video, index) => {
+    // Skip small video elements (e.g. stories previews)
+    const rect = video.getBoundingClientRect();
+    if (rect.width > 0 && rect.width < 200) return;
+
     const src = video.getAttribute("src") || video.querySelector("source")?.getAttribute("src");
     if (src) {
       const poster = video.getAttribute("poster") || "";
@@ -76,20 +100,24 @@ function extractFromDOM(postUrl: string): PostInfo | null {
         type: "video",
         url: src,
         thumbnailUrl: poster || src,
-        width: video.videoWidth || 1080,
-        height: video.videoHeight || 1920,
+        width: video.videoWidth || rect.width || 1080,
+        height: video.videoHeight || rect.height || 1920,
         postUrl,
         filename: `${author}_video_${index + 1}`,
       });
     }
   });
 
-  // 2. Extract Images (skipping avatars and icons)
-  const images = Array.from(article.querySelectorAll("img"));
+  // 2. Extract Images (skipping avatars and icons based on size and class)
+  const images = Array.from(container.querySelectorAll("img"));
   images.forEach((img, index) => {
+    // Skip small images (avatars, icons) using rendered dimensions if possible
+    const rect = img.getBoundingClientRect();
+    if (rect.width > 0 && rect.width < 200) return;
+
     const widthAttr = img.getAttribute("width");
     const heightAttr = img.getAttribute("height");
-    const isSmall = (widthAttr && parseInt(widthAttr) < 150) || (heightAttr && parseInt(heightAttr) < 150);
+    const isSmall = (widthAttr && parseInt(widthAttr) < 200) || (heightAttr && parseInt(heightAttr) < 200);
     if (isSmall) return;
 
     if (img.closest("header") || img.closest('[role="link"] img') || img.getAttribute("alt")?.includes("profile")) {
@@ -117,8 +145,8 @@ function extractFromDOM(postUrl: string): PostInfo | null {
         type: "photo",
         url: src,
         thumbnailUrl: src,
-        width: img.naturalWidth || 1080,
-        height: img.naturalHeight || 1080,
+        width: img.naturalWidth || rect.width || 1080,
+        height: img.naturalHeight || rect.height || 1080,
         postUrl,
         filename: `${author}_photo_${index + 1}`,
       });
