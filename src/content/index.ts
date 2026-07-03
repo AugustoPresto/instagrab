@@ -301,91 +301,55 @@ function getShortcodeFromUrl(urlStr: string): string | null {
   return null;
 }
 
-async function getReactPropsData(shortcode: string): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const handler = (event: MessageEvent) => {
-      if (event.source !== window) return;
-      if (event.data?.type === "INSTAGRAB_REACT_DATA") {
-        window.removeEventListener("message", handler);
-        resolve(event.data.payload);
+const interceptedPosts = new Map<string, PostInfo>();
+
+// Listen for intercepted fetch calls from the page context
+window.addEventListener("message", (event) => {
+  if (event.source !== window) return;
+  if (event.data?.type === "INSTAGRAB_INTERCEPTED_DATA" && event.data.payload) {
+    try {
+      const currentUrl = window.location.href;
+      const postInfo = extractPostInfo([event.data.payload], currentUrl);
+      if (postInfo && postInfo.shortcode) {
+        interceptedPosts.set(postInfo.shortcode, postInfo);
       }
-    };
-    window.addEventListener("message", handler);
+    } catch (e) {
+      // ignore
+    }
+  }
+});
 
-    // Timeout after 1 second if React scraper fails
-    const timer = setTimeout(() => {
-      window.removeEventListener("message", handler);
-      reject(new Error("React scraper timeout"));
-    }, 1000);
-
+// Inject fetch interceptor immediately to capture GraphQL requests
+(function injectFetchInterceptor() {
+  try {
     const code = `
       (function() {
-        function findMediaInObject(obj, shortcode, depth) {
-          if (!obj || depth > 8) return null;
-          if (typeof obj !== "object") return null;
-          if (obj.code === shortcode || (typeof obj.id === 'string' && obj.id.includes(shortcode))) {
-            if (obj.carousel_media || obj.video_versions || obj.image_versions2) {
-              return obj;
+        const originalFetch = window.fetch;
+        window.fetch = async function(...args) {
+          const response = await originalFetch.apply(this, args);
+          try {
+            const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
+            if (url.includes('/api/v1/') || url.includes('/graphql/query')) {
+              const clone = response.clone();
+              clone.json().then(data => {
+                if (data) {
+                  window.postMessage({ type: "INSTAGRAB_INTERCEPTED_DATA", payload: data }, "*");
+                }
+              }).catch(() => {});
             }
-          }
-          for (const key in obj) {
-            if (key === "children" || key === "element" || key === "node" || key === "reactRef") continue;
-            try {
-              const val = obj[key];
-              if (val && typeof val === "object") {
-                const found = findMediaInObject(val, shortcode, depth + 1);
-                if (found) return found;
-              }
-            } catch (e) {}
-          }
-          return null;
-        }
-
-        function searchFiber(node, shortcode) {
-          if (!node) return null;
-          const props = node.memoizedProps || node;
-          if (props) {
-            const media = findMediaInObject(props, shortcode, 0);
-            if (media) return media;
-          }
-          if (node.child) {
-            const found = searchFiber(node.child, shortcode);
-            if (found) return found;
-          }
-          if (node.sibling) {
-            const found = searchFiber(node.sibling, shortcode);
-            if (found) return found;
-          }
-          return null;
-        }
-
-        const pathParts = window.location.pathname.split("/").filter(Boolean);
-        const shortcode = pathParts[1];
-        if (!shortcode) return;
-
-        const elements = Array.from(document.querySelectorAll("article, div[role='dialog'], [role='presentation']"));
-        let foundMedia = null;
-
-        for (const el of elements) {
-          const key = Object.keys(el).find(k => k.startsWith("__reactFiber$") || k.startsWith("__reactProps$"));
-          if (!key) continue;
-          const root = el[key];
-          foundMedia = searchFiber(root, shortcode);
-          if (foundMedia) break;
-        }
-
-        if (foundMedia) {
-          window.postMessage({ type: "INSTAGRAB_REACT_DATA", payload: { items: [foundMedia] } }, "*");
-        }
+          } catch (e) {}
+          return response;
+        };
       })();
     `;
-
     const script = document.createElement("script");
     script.textContent = code;
     (document.head || document.documentElement).appendChild(script);
     script.remove();
-  });
-}
+  } catch (err) {
+    console.error("InstaGrab: Failed to inject fetch interceptor:", err);
+  }
+})();
 
 chrome.runtime.onMessage.addListener(
   (message: ExtensionMessage, _sender, sendResponse) => {
@@ -401,27 +365,25 @@ chrome.runtime.onMessage.addListener(
     // Run async extraction to support fetching page HTML as fallback
     (async () => {
       try {
-        // 1. Try local DOM scripts first (Fast Path)
-        const scriptElements = document.querySelectorAll('script[type="application/json"]');
-        const jsonScripts = Array.from(scriptElements)
-          .map((s) => s.textContent || "")
-          .filter((t) => t.trim().length > 0);
-
-        let postInfo = extractPostInfo(jsonScripts, currentUrl);
-
-        // 2. Try injected React Fiber Scraper (Fastest, bypasses CSP/CORS/Service Workers entirely)
         const shortcode = getShortcodeFromUrl(currentUrl);
-        if (!postInfo && shortcode) {
-          try {
-            console.log("InstaGrab: Attempting React memory scraper for shortcode:", shortcode);
-            const data = await getReactPropsData(shortcode);
-            postInfo = extractPostInfo([data], currentUrl);
-            if (postInfo) {
-              console.log("InstaGrab: React memory scraper successful!");
-            }
-          } catch (reactErr) {
-            console.log("InstaGrab: React memory scraper skipped/failed:", reactErr);
+
+        // 1. Try our captured/intercepted GraphQL/API cache (Zero network request, instant!)
+        let postInfo: PostInfo | null = null;
+        if (shortcode && interceptedPosts.has(shortcode)) {
+          postInfo = interceptedPosts.get(shortcode) || null;
+          if (postInfo) {
+            console.log("InstaGrab: Extracted post info from intercepted cache!");
           }
+        }
+
+        // 2. Try local DOM scripts first (Fast Path)
+        if (!postInfo) {
+          const scriptElements = document.querySelectorAll('script[type="application/json"]');
+          const jsonScripts = Array.from(scriptElements)
+            .map((s) => s.textContent || "")
+            .filter((t) => t.trim().length > 0);
+
+          postInfo = extractPostInfo(jsonScripts, currentUrl);
         }
 
         // 3. Fallback: Request JSON API endpoint (API Path — highly reliable same-origin JSON)
