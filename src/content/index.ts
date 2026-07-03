@@ -95,6 +95,7 @@ function extractFromDOM(postUrl: string): PostInfo | null {
     const src = video.getAttribute("src") || video.querySelector("source")?.getAttribute("src");
     if (src) {
       const poster = video.getAttribute("poster") || "";
+      // 1. Add video item
       mediaItems.push({
         id: `dom_video_${shortcode}_${index + 1}`,
         type: "video",
@@ -105,6 +106,20 @@ function extractFromDOM(postUrl: string): PostInfo | null {
         postUrl,
         filename: `${author}_video_${index + 1}`,
       });
+
+      // 2. Add thumbnail as separate photo item for download
+      if (poster) {
+        mediaItems.push({
+          id: `dom_video_thumb_${shortcode}_${index + 1}`,
+          type: "photo",
+          url: poster,
+          thumbnailUrl: poster,
+          width: video.videoWidth || rect.width || 1080,
+          height: video.videoHeight || rect.height || 1920,
+          postUrl,
+          filename: `${author}_video_thumb_${index + 1}`,
+        });
+      }
     }
   });
 
@@ -182,6 +197,51 @@ function extractFromDOM(postUrl: string): PostInfo | null {
   };
 }
 
+async function fetchPostJson(url: string): Promise<any> {
+  // Construct same-origin JSON API endpoint
+  const separator = url.includes("?") ? "&" : "?";
+  const apiUrl = url.endsWith("/") 
+    ? `${url.slice(0, -1)}${separator}__a=1&__d=dis`
+    : `${url}${separator}__a=1&__d=dis`;
+
+  // 1. Try direct fetch in content script
+  try {
+    const resp = await fetch(apiUrl, { credentials: "include" });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data && !resp.url.includes("accounts/login")) {
+        return data;
+      }
+    }
+  } catch (err) {
+    console.log("InstaGrab: Content script API fetch failed/blocked by CSP. Trying background fetch...", err);
+  }
+
+  // 2. Try fetching via background worker
+  const response = await new Promise<ExtensionMessage>((resolve) => {
+    chrome.runtime.sendMessage(
+      { type: "FETCH_URL_HTML", payload: apiUrl } as ExtensionMessage,
+      (res) => resolve(res)
+    );
+  });
+
+  if (response?.type === "FETCH_URL_HTML_RESULT" && response.payload) {
+    try {
+      return JSON.parse(response.payload);
+    } catch {
+      if (response.payload.includes("accounts/login")) {
+        throw new Error("Instagram redirected the request to login. Please make sure you are logged in.");
+      }
+    }
+  }
+
+  if (response?.type === "ERROR") {
+    throw new Error(response.payload);
+  }
+
+  throw new Error("Failed to retrieve post JSON via all methods.");
+}
+
 async function fetchPostHtml(url: string): Promise<string> {
   // 1. Try fetching directly in the content script (Same-Origin path — carries cookies natively)
   try {
@@ -238,7 +298,17 @@ chrome.runtime.onMessage.addListener(
 
         let postInfo = extractPostInfo(jsonScripts, currentUrl);
 
-        // 2. Fallback: Request page HTML and parse JSON scripts using robust regex matching
+        // 2. Fallback: Request JSON API endpoint (API Path — highly reliable same-origin JSON)
+        if (!postInfo) {
+          try {
+            const data = await fetchPostJson(currentUrl);
+            postInfo = extractPostInfo([data], currentUrl);
+          } catch (apiErr) {
+            console.error("InstaGrab API fetch fallback error:", apiErr);
+          }
+        }
+
+        // 3. Fallback: Request page HTML and parse JSON scripts using robust regex matching
         if (!postInfo) {
           try {
             const htmlText = await fetchPostHtml(currentUrl);
@@ -261,7 +331,7 @@ chrome.runtime.onMessage.addListener(
           }
         }
 
-        // 3. Fallback: Parse the DOM elements directly (Super Fallback)
+        // 4. Fallback: Parse the DOM elements directly (Super Fallback)
         if (!postInfo) {
           console.log("InstaGrab: JSON extraction failed. Falling back to DOM scraping...");
           postInfo = extractFromDOM(currentUrl);

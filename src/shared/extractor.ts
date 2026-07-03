@@ -79,15 +79,18 @@ function pickBestCandidate(candidates: ImageCandidate[]): ImageCandidate | null 
 }
 
 /**
- * Converts a raw InstagramMedia object into a MediaItem.
+ * Converts a raw InstagramMedia object into one or more MediaItems.
+ * If the media is a video, it yields both the video and its thumbnail as separate items.
  */
-function mediaToItem(
+function mediaToItems(
   media: InstagramMedia,
   postUrl: string,
   author: string,
   index: number,
   total: number
-): MediaItem | null {
+): MediaItem[] {
+  const items: MediaItem[] = [];
+
   // Detect if this is a video
   const isVideo =
     media.media_type === 2 ||
@@ -95,69 +98,100 @@ function mediaToItem(
 
   const candidates = media.image_versions2?.candidates ?? [];
   const best = pickBestCandidate(candidates);
-  if (!best) return null;
+  if (!best) return [];
 
   const cleanedUrl = cleanUrl(best.url);
 
   // Build a safe filename from the media pk/id
   const mediaId = media.pk ?? media.id ?? `media_${index}`;
-  const ext = isVideo ? "mp4" : "jpg";
-  const suffix = total > 1 ? `_${index}of${total}` : "";
-  const filename = `${author}_${mediaId}${suffix}.${ext}`;
 
   // Thumbnail = smallest uncropped or first candidate
   const thumb = candidates.find((c) => c.width <= 320 && !isCroppedUrl(c.url));
   const thumbnailUrl = cleanUrl((thumb ?? candidates[0])?.url ?? best.url);
 
-  // If it is a video, find the highest resolution video version URL
-  let downloadUrl = cleanedUrl;
-  let width = best.width;
-  let height = best.height;
-
   if (isVideo && Array.isArray(media.video_versions) && media.video_versions.length > 0) {
+    // 1. Pick the highest resolution video version
     const bestVideo = media.video_versions.reduce((bestV, v) =>
       v.width * v.height > bestV.width * bestV.height ? v : bestV
     );
     if (bestVideo?.url) {
-      downloadUrl = cleanUrl(bestVideo.url);
-      width = bestVideo.width;
-      height = bestVideo.height;
+      const downloadUrl = cleanUrl(bestVideo.url);
+      const suffix = total > 1 ? `_${index}of${total}` : "";
+      items.push({
+        id: `${mediaId}_video`,
+        type: "video",
+        url: downloadUrl,
+        thumbnailUrl,
+        width: bestVideo.width,
+        height: bestVideo.height,
+        postUrl,
+        filename: `${author}_${mediaId}${suffix}.mp4`,
+        ...(total > 1 ? { carouselIndex: index, carouselTotal: total } : {}),
+      });
     }
+
+    // 2. Add the thumbnail itself as a separate image item for download
+    const suffix = total > 1 ? `_${index}of${total}_thumb` : "_thumb";
+    items.push({
+      id: `${mediaId}_thumb`,
+      type: "photo",
+      url: cleanedUrl,
+      thumbnailUrl,
+      width: best.width,
+      height: best.height,
+      postUrl,
+      filename: `${author}_${mediaId}${suffix}.jpg`,
+      ...(total > 1 ? { carouselIndex: index, carouselTotal: total } : {}),
+    });
+  } else {
+    // Standard photo
+    const suffix = total > 1 ? `_${index}of${total}` : "";
+    items.push({
+      id: `${mediaId}_photo`,
+      type: "photo",
+      url: cleanedUrl,
+      thumbnailUrl,
+      width: best.width,
+      height: best.height,
+      postUrl,
+      filename: `${author}_${mediaId}${suffix}.jpg`,
+      ...(total > 1 ? { carouselIndex: index, carouselTotal: total } : {}),
+    });
   }
 
-  return {
-    id: String(mediaId),
-    type: isVideo ? "video" : "photo",
-    url: downloadUrl,
-    thumbnailUrl,
-    width,
-    height,
-    postUrl,
-    filename,
-    ...(total > 1 ? { carouselIndex: index, carouselTotal: total } : {}),
-  };
+  return items;
 }
 
-/**
- * Extracts post information from the current Instagram page source.
- * This mirrors the Python logic we validated earlier but runs in the browser.
- */
-export function extractPostInfo(jsonScripts: string[], postUrl: string): PostInfo | null {
+export function extractPostInfo(jsonScripts: (string | object)[], postUrl: string): PostInfo | null {
   for (const scriptContent of jsonScripts) {
     let data: unknown;
-    try {
-      data = JSON.parse(scriptContent);
-    } catch {
-      continue;
+    if (typeof scriptContent === "string") {
+      try {
+        data = JSON.parse(scriptContent);
+      } catch {
+        continue;
+      }
+    } else {
+      data = scriptContent;
     }
 
+    // Check both standard web info path and root data/item paths (which ?__a=1 API uses)
     const webInfo = findKeyRecursive<WebInfo>(
       data,
       "xdt_api__v1__media__shortcode__web_info"
     );
-    if (!webInfo?.items?.length) continue;
+    
+    let item: InstagramMedia | null = null;
+    if (webInfo?.items?.length) {
+      item = webInfo.items[0];
+    } else {
+      // Direct API path: root items, graphql or post details
+      const itemsList = findKeyRecursive<InstagramMedia[]>(data, "items");
+      if (itemsList?.length) {
+        item = itemsList[0];
+      }
+    }
 
-    const item = webInfo.items[0];
     if (!item) continue;
 
     // Extract author from user object
@@ -179,8 +213,7 @@ export function extractPostInfo(jsonScripts: string[], postUrl: string): PostInf
 
     const total = rawMediaList.length;
     const mediaItems: MediaItem[] = rawMediaList
-      .map((m, i) => mediaToItem(m, postUrl, author, i + 1, total))
-      .filter((m): m is MediaItem => m !== null);
+      .flatMap((m, i) => mediaToItems(m, postUrl, author, i + 1, total));
 
     if (mediaItems.length === 0) continue;
 
