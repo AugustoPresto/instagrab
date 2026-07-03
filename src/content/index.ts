@@ -290,6 +290,103 @@ async function fetchPostHtml(url: string): Promise<string> {
   throw new Error("Failed to fetch page HTML via all methods.");
 }
 
+function getShortcodeFromUrl(urlStr: string): string | null {
+  try {
+    const parsed = new URL(urlStr);
+    const pathParts = parsed.pathname.split("/").filter(Boolean);
+    if (pathParts.length >= 2 && ["p", "reel", "tv"].includes(pathParts[0])) {
+      return pathParts[1];
+    }
+  } catch {}
+  return null;
+}
+
+async function getReactPropsData(shortcode: string): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const handler = (event: MessageEvent) => {
+      if (event.source !== window) return;
+      if (event.data?.type === "INSTAGRAB_REACT_DATA") {
+        window.removeEventListener("message", handler);
+        resolve(event.data.payload);
+      }
+    };
+    window.addEventListener("message", handler);
+
+    // Timeout after 1 second if React scraper fails
+    const timer = setTimeout(() => {
+      window.removeEventListener("message", handler);
+      reject(new Error("React scraper timeout"));
+    }, 1000);
+
+    const code = `
+      (function() {
+        function findMediaInObject(obj, shortcode, depth) {
+          if (!obj || depth > 8) return null;
+          if (typeof obj !== "object") return null;
+          if (obj.code === shortcode || (typeof obj.id === 'string' && obj.id.includes(shortcode))) {
+            if (obj.carousel_media || obj.video_versions || obj.image_versions2) {
+              return obj;
+            }
+          }
+          for (const key in obj) {
+            if (key === "children" || key === "element" || key === "node" || key === "reactRef") continue;
+            try {
+              const val = obj[key];
+              if (val && typeof val === "object") {
+                const found = findMediaInObject(val, shortcode, depth + 1);
+                if (found) return found;
+              }
+            } catch (e) {}
+          }
+          return null;
+        }
+
+        function searchFiber(node, shortcode) {
+          if (!node) return null;
+          const props = node.memoizedProps || node;
+          if (props) {
+            const media = findMediaInObject(props, shortcode, 0);
+            if (media) return media;
+          }
+          if (node.child) {
+            const found = searchFiber(node.child, shortcode);
+            if (found) return found;
+          }
+          if (node.sibling) {
+            const found = searchFiber(node.sibling, shortcode);
+            if (found) return found;
+          }
+          return null;
+        }
+
+        const pathParts = window.location.pathname.split("/").filter(Boolean);
+        const shortcode = pathParts[1];
+        if (!shortcode) return;
+
+        const elements = Array.from(document.querySelectorAll("article, div[role='dialog'], [role='presentation']"));
+        let foundMedia = null;
+
+        for (const el of elements) {
+          const key = Object.keys(el).find(k => k.startsWith("__reactFiber$") || k.startsWith("__reactProps$"));
+          if (!key) continue;
+          const root = el[key];
+          foundMedia = searchFiber(root, shortcode);
+          if (foundMedia) break;
+        }
+
+        if (foundMedia) {
+          window.postMessage({ type: "INSTAGRAB_REACT_DATA", payload: { items: [foundMedia] } }, "*");
+        }
+      })();
+    `;
+
+    const script = document.createElement("script");
+    script.textContent = code;
+    (document.head || document.documentElement).appendChild(script);
+    script.remove();
+  });
+}
+
 chrome.runtime.onMessage.addListener(
   (message: ExtensionMessage, _sender, sendResponse) => {
     if (message.type !== "GET_POST_INFO") return;
@@ -312,7 +409,22 @@ chrome.runtime.onMessage.addListener(
 
         let postInfo = extractPostInfo(jsonScripts, currentUrl);
 
-        // 2. Fallback: Request JSON API endpoint (API Path — highly reliable same-origin JSON)
+        // 2. Try injected React Fiber Scraper (Fastest, bypasses CSP/CORS/Service Workers entirely)
+        const shortcode = getShortcodeFromUrl(currentUrl);
+        if (!postInfo && shortcode) {
+          try {
+            console.log("InstaGrab: Attempting React memory scraper for shortcode:", shortcode);
+            const data = await getReactPropsData(shortcode);
+            postInfo = extractPostInfo([data], currentUrl);
+            if (postInfo) {
+              console.log("InstaGrab: React memory scraper successful!");
+            }
+          } catch (reactErr) {
+            console.log("InstaGrab: React memory scraper skipped/failed:", reactErr);
+          }
+        }
+
+        // 3. Fallback: Request JSON API endpoint (API Path — highly reliable same-origin JSON)
         if (!postInfo) {
           try {
             const data = await fetchPostJson(currentUrl);
@@ -322,7 +434,7 @@ chrome.runtime.onMessage.addListener(
           }
         }
 
-        // 3. Fallback: Request page HTML and parse JSON scripts using robust regex matching
+        // 4. Fallback: Request page HTML and parse JSON scripts using robust regex matching
         if (!postInfo) {
           try {
             const htmlText = await fetchPostHtml(currentUrl);
@@ -345,7 +457,7 @@ chrome.runtime.onMessage.addListener(
           }
         }
 
-        // 4. Fallback: Parse the DOM elements directly (Super Fallback)
+        // 5. Fallback: Parse the DOM elements directly (Super Fallback)
         if (!postInfo) {
           console.log("InstaGrab: JSON extraction failed. Falling back to DOM scraping...");
           postInfo = extractFromDOM(currentUrl);
