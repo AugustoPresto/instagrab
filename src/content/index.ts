@@ -197,12 +197,24 @@ function extractFromDOM(postUrl: string): PostInfo | null {
   };
 }
 
+function getCanonicalPostUrl(urlStr: string): string {
+  try {
+    const url = new URL(urlStr);
+    const pathParts = url.pathname.split("/").filter(Boolean);
+    if (pathParts.length >= 2) {
+      const type = pathParts[0]; // p, reel, tv
+      const shortcode = pathParts[1];
+      return `${url.origin}/${type}/${shortcode}/`;
+    }
+  } catch (e) {
+    // ignore
+  }
+  return urlStr.split("?")[0].replace(/\/?$/, "/");
+}
+
 async function fetchPostJson(url: string): Promise<any> {
-  // Construct same-origin JSON API endpoint
-  const separator = url.includes("?") ? "&" : "?";
-  const apiUrl = url.endsWith("/") 
-    ? `${url.slice(0, -1)}${separator}__a=1&__d=dis`
-    : `${url}${separator}__a=1&__d=dis`;
+  const canonicalUrl = getCanonicalPostUrl(url);
+  const apiUrl = `${canonicalUrl}?__a=1&__d=dis`;
 
   // 1. Try direct fetch in content script
   try {
@@ -243,9 +255,11 @@ async function fetchPostJson(url: string): Promise<any> {
 }
 
 async function fetchPostHtml(url: string): Promise<string> {
+  const canonicalUrl = getCanonicalPostUrl(url);
+
   // 1. Try fetching directly in the content script (Same-Origin path — carries cookies natively)
   try {
-    const resp = await fetch(url, { credentials: "include" });
+    const resp = await fetch(canonicalUrl, { credentials: "include" });
     if (resp.ok) {
       const text = await resp.text();
       // If we got redirected to login page, direct fetch didn't work (unauthenticated direct load)
@@ -260,7 +274,7 @@ async function fetchPostHtml(url: string): Promise<string> {
   // 2. Try fetching via background script (bypasses CSP)
   const response = await new Promise<ExtensionMessage>((resolve) => {
     chrome.runtime.sendMessage(
-      { type: "FETCH_URL_HTML", payload: url } as ExtensionMessage,
+      { type: "FETCH_URL_HTML", payload: canonicalUrl } as ExtensionMessage,
       (res) => resolve(res)
     );
   });
