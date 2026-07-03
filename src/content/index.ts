@@ -182,6 +182,40 @@ function extractFromDOM(postUrl: string): PostInfo | null {
   };
 }
 
+async function fetchPostHtml(url: string): Promise<string> {
+  // 1. Try fetching directly in the content script (Same-Origin path — carries cookies natively)
+  try {
+    const resp = await fetch(url, { credentials: "include" });
+    if (resp.ok) {
+      const text = await resp.text();
+      // If we got redirected to login page, direct fetch didn't work (unauthenticated direct load)
+      if (!resp.url.includes("accounts/login")) {
+        return text;
+      }
+    }
+  } catch (err) {
+    console.log("InstaGrab: Content script direct fetch failed/blocked by CSP. Trying background fetch...", err);
+  }
+
+  // 2. Try fetching via background script (bypasses CSP)
+  const response = await new Promise<ExtensionMessage>((resolve) => {
+    chrome.runtime.sendMessage(
+      { type: "FETCH_URL_HTML", payload: url } as ExtensionMessage,
+      (res) => resolve(res)
+    );
+  });
+
+  if (response?.type === "FETCH_URL_HTML_RESULT" && response.payload) {
+    return response.payload;
+  }
+
+  if (response?.type === "ERROR") {
+    throw new Error(response.payload);
+  }
+
+  throw new Error("Failed to fetch page HTML via all methods.");
+}
+
 chrome.runtime.onMessage.addListener(
   (message: ExtensionMessage, _sender, sendResponse) => {
     if (message.type !== "GET_POST_INFO") return;
@@ -204,29 +238,26 @@ chrome.runtime.onMessage.addListener(
 
         let postInfo = extractPostInfo(jsonScripts, currentUrl);
 
-        // 2. Fallback: Request background script to fetch page HTML (bypasses page CSP and CORS restrictions)
+        // 2. Fallback: Request page HTML and parse JSON scripts using robust regex matching
         if (!postInfo) {
           try {
-            const response = await new Promise<ExtensionMessage>((resolve) => {
-              chrome.runtime.sendMessage(
-                { type: "FETCH_URL_HTML", payload: currentUrl } as ExtensionMessage,
-                (res) => resolve(res)
-              );
-            });
+            const htmlText = await fetchPostHtml(currentUrl);
 
-            if (response?.type === "FETCH_URL_HTML_RESULT" && response.payload) {
-              const htmlText = response.payload;
-              const scriptPattern = /<script\s+type="application\/json"[^>]*>([\s\S]*?)<\/script>/g;
-              const fetchedScripts: string[] = [];
-              let match;
-              while ((match = scriptPattern.exec(htmlText)) !== null) {
-                fetchedScripts.push(match[1]);
+            // Match all script tags recursively and check attributes for application/json type
+            const scriptPattern = /<script([^>]*)>([\s\S]*?)<\/script>/g;
+            const fetchedScripts: string[] = [];
+            let match;
+            while ((match = scriptPattern.exec(htmlText)) !== null) {
+              const attrs = match[1];
+              const content = match[2];
+              if (attrs.includes('type="application/json"') || attrs.includes("type='application/json'")) {
+                fetchedScripts.push(content);
               }
-
-              postInfo = extractPostInfo(fetchedScripts, currentUrl);
             }
+
+            postInfo = extractPostInfo(fetchedScripts, currentUrl);
           } catch (fetchErr) {
-            console.error("InstaGrab background fetch fallback error:", fetchErr);
+            console.error("InstaGrab HTML fetch fallback error:", fetchErr);
           }
         }
 
