@@ -31,11 +31,17 @@ interface ImageCandidate {
   height: number;
 }
 
+interface VideoVersion {
+  url: string;
+  width: number;
+  height: number;
+}
+
 interface InstagramMedia {
   pk?: string;
   id?: string;
   media_type?: number;
-  video_versions?: unknown[];
+  video_versions?: VideoVersion[];
   image_versions2?: { candidates?: ImageCandidate[] };
   carousel_media?: InstagramMedia[];
   code?: string;
@@ -103,13 +109,29 @@ function mediaToItem(
   const thumb = candidates.find((c) => c.width <= 320 && !isCroppedUrl(c.url));
   const thumbnailUrl = cleanUrl((thumb ?? candidates[0])?.url ?? best.url);
 
+  // If it is a video, find the highest resolution video version URL
+  let downloadUrl = cleanedUrl;
+  let width = best.width;
+  let height = best.height;
+
+  if (isVideo && Array.isArray(media.video_versions) && media.video_versions.length > 0) {
+    const bestVideo = media.video_versions.reduce((bestV, v) =>
+      v.width * v.height > bestV.width * bestV.height ? v : bestV
+    );
+    if (bestVideo?.url) {
+      downloadUrl = cleanUrl(bestVideo.url);
+      width = bestVideo.width;
+      height = bestVideo.height;
+    }
+  }
+
   return {
     id: String(mediaId),
     type: isVideo ? "video" : "photo",
-    url: cleanedUrl,
+    url: downloadUrl,
     thumbnailUrl,
-    width: best.width,
-    height: best.height,
+    width,
+    height,
     postUrl,
     filename,
     ...(total > 1 ? { carouselIndex: index, carouselTotal: total } : {}),
