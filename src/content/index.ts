@@ -10,7 +10,12 @@ import { extractPostInfo } from "../shared/extractor";
 let cachedPostInfo: PostInfo | null = null;
 
 function isPostUrl(url: string): boolean {
-  return /instagram\.com\/(p|reel|tv)\//.test(url);
+  try {
+    const parsed = new URL(url);
+    return /\/(p|reel|tv)\/[a-zA-Z0-9_\-]+/.test(parsed.pathname);
+  } catch {
+    return false;
+  }
 }
 
 chrome.runtime.onMessage.addListener(
@@ -24,14 +29,38 @@ chrome.runtime.onMessage.addListener(
       return true;
     }
 
-    // Extract from current page HTML
-    try {
-      const postInfo = extractPostInfo(document.documentElement.innerHTML, currentUrl);
-      cachedPostInfo = postInfo;
-      sendResponse({ type: "POST_INFO_RESULT", payload: postInfo });
-    } catch (err) {
-      sendResponse({ type: "ERROR", payload: String(err) });
-    }
+    // Run async extraction to support fetching page HTML as fallback
+    (async () => {
+      try {
+        // 1. Try local DOM scripts first (Fast Path)
+        const scriptElements = document.querySelectorAll('script[type="application/json"]');
+        const jsonScripts = Array.from(scriptElements)
+          .map((s) => s.textContent || "")
+          .filter((t) => t.trim().length > 0);
+
+        let postInfo = extractPostInfo(jsonScripts, currentUrl);
+
+        // 2. Fallback: Fetch page HTML directly (handles client-side SPA transitions where DOM scripts are stale)
+        if (!postInfo) {
+          const resp = await fetch(currentUrl, { credentials: "include" });
+          const htmlText = await resp.text();
+
+          const scriptPattern = /<script\s+type="application\/json"[^>]*>([\s\S]*?)<\/script>/g;
+          const fetchedScripts: string[] = [];
+          let match;
+          while ((match = scriptPattern.exec(htmlText)) !== null) {
+            fetchedScripts.push(match[1]);
+          }
+
+          postInfo = extractPostInfo(fetchedScripts, currentUrl);
+        }
+
+        cachedPostInfo = postInfo;
+        sendResponse({ type: "POST_INFO_RESULT", payload: postInfo });
+      } catch (err) {
+        sendResponse({ type: "ERROR", payload: String(err) });
+      }
+    })();
 
     return true; // Keep channel open for async
   }

@@ -120,16 +120,11 @@ function mediaToItem(
  * Extracts post information from the current Instagram page source.
  * This mirrors the Python logic we validated earlier but runs in the browser.
  */
-export function extractPostInfo(html: string, postUrl: string): PostInfo | null {
-  // Find all application/json script tags
-  const scriptPattern =
-    /<script\s+type="application\/json"[^>]*>([\s\S]*?)<\/script>/g;
-  let match: RegExpExecArray | null;
-
-  while ((match = scriptPattern.exec(html)) !== null) {
+export function extractPostInfo(jsonScripts: string[], postUrl: string): PostInfo | null {
+  for (const scriptContent of jsonScripts) {
     let data: unknown;
     try {
-      data = JSON.parse(match[1]);
+      data = JSON.parse(scriptContent);
     } catch {
       continue;
     }

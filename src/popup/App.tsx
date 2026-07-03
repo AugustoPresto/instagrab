@@ -28,7 +28,16 @@ export default function App() {
         return;
       }
 
-      if (!/instagram\.com\/(p|reel|tv)\//.test(url)) {
+      const isPostUrl = (u: string) => {
+        try {
+          const parsed = new URL(u);
+          return /\/(p|reel|tv)\/[a-zA-Z0-9_\-]+/.test(parsed.pathname);
+        } catch {
+          return false;
+        }
+      };
+
+      if (!isPostUrl(url)) {
         setAppState("not-post");
         return;
       }
