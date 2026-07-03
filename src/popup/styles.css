@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply box-border;
+  }
+  body {
+    @apply font-sans bg-gray-950 text-white m-0 p-0;
+    width: 380px;
+    min-height: 200px;
+  }
+}
+
+@layer components {
+  .gradient-text {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, #f77737, #e1306c, #833ab4);
+  }
+
+  .btn-primary {
+    @apply w-full py-2.5 px-4 rounded-xl font-semibold text-sm text-white
+           transition-all duration-200 ease-in-out
+           hover:opacity-90 hover:scale-[1.01] active:scale-[0.99]
+           disabled:opacity-40 disabled:cursor-not-allowed disabled:scale-100;
+    background: linear-gradient(135deg, #f77737, #e1306c, #833ab4);
+  }
+
+  .btn-secondary {
+    @apply w-full py-2 px-4 rounded-xl font-medium text-sm text-gray-300 bg-gray-800
+           border border-gray-700 transition-all duration-200
+           hover:bg-gray-700 hover:text-white active:scale-[0.99]
+           disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  .media-card {
+    @apply relative rounded-lg overflow-hidden bg-gray-800 border border-gray-700
+           transition-all duration-200 hover:border-pink-500/50 cursor-pointer;
+  }
+
+  .media-card.selected {
+    @apply border-pink-500 ring-1 ring-pink-500/50;
+  }
+
+  .badge {
+    @apply absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded-md text-[10px] font-bold
+           uppercase tracking-wide backdrop-blur-sm;
+  }
+
+  .progress-bar {
+    @apply h-1 rounded-full transition-all duration-300 ease-out;
+    background: linear-gradient(90deg, #f77737, #e1306c);
+  }
+}

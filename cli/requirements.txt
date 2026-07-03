@@ -1,0 +1,7 @@
+# Core CLI dependencies
+openai>=1.54.0          # GPT-4o Vision API
+Pillow>=10.4.0          # Image loading
+
+# Optional: local AI (fully offline, no API key)
+torch>=2.1.0
+open_clip_torch>=2.26.1
