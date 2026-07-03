@@ -43,9 +43,13 @@ async function handleDownloads(request: DownloadRequest): Promise<void> {
 
   for (let i = 0; i < request.items.length; i++) {
     const item = request.items[i];
-    const paddedIdx = String(i + 1).padStart(2, "0");
-    const ext = item.type === "video" ? "mp4" : "jpg";
-    const filename = `${prefix}_${paddedIdx}_${item.filename ?? item.id}.${ext}`;
+    let filename = item.filename ?? `${prefix}_${item.id}`;
+    
+    // Append extension if not already present
+    if (!filename.endsWith(".mp4") && !filename.endsWith(".jpg")) {
+      const ext = item.type === "video" ? "mp4" : "jpg";
+      filename = `${filename}.${ext}`;
+    }
 
     await chrome.downloads.download({
       url: item.url,

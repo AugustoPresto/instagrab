@@ -104,7 +104,7 @@ function extractFromDOM(postUrl: string): PostInfo | null {
         width: video.videoWidth || rect.width || 1080,
         height: video.videoHeight || rect.height || 1920,
         postUrl,
-        filename: `${author}_video_${index + 1}`,
+        filename: `${author}_video_${index + 1}.mp4`,
       });
 
       // 2. Add thumbnail as separate photo item for download
@@ -117,7 +117,7 @@ function extractFromDOM(postUrl: string): PostInfo | null {
           width: video.videoWidth || rect.width || 1080,
           height: video.videoHeight || rect.height || 1920,
           postUrl,
-          filename: `${author}_video_thumb_${index + 1}`,
+          filename: `${author}_video_thumb_${index + 1}.jpg`,
         });
       }
     }
@@ -163,7 +163,7 @@ function extractFromDOM(postUrl: string): PostInfo | null {
         width: img.naturalWidth || rect.width || 1080,
         height: img.naturalHeight || rect.height || 1080,
         postUrl,
-        filename: `${author}_photo_${index + 1}`,
+        filename: `${author}_photo_${index + 1}.jpg`,
       });
     }
   });
