@@ -1,18 +1,21 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "path";
-import { copyFileSync } from "fs";
+import { copyFileSync, readFileSync, writeFileSync } from "fs";
 
-// Plugin: after build, copy popup.html to dist root (Chrome expects it at dist/popup.html)
+// Plugin: after build, copy popup.html to dist root and fix absolute paths
 function copyPopupHtml() {
   return {
     name: "copy-popup-html",
     closeBundle() {
       try {
-        copyFileSync(
-          resolve(__dirname, "dist/src/popup/index.html"),
-          resolve(__dirname, "dist/popup.html")
-        );
+        const src = resolve(__dirname, "dist/src/popup/index.html");
+        const dest = resolve(__dirname, "dist/popup.html");
+        let html = readFileSync(src, "utf-8");
+        // Chrome extensions don't support absolute paths — make them relative
+        html = html.replace(/src="\/popup\.js"/g, 'src="./popup.js"');
+        html = html.replace(/href="\/([^"]+)"/g, 'href="./$1"');
+        writeFileSync(dest, html);
       } catch (e) {
         // ignore if not found
       }
