@@ -197,24 +197,12 @@ function extractFromDOM(postUrl: string): PostInfo | null {
   };
 }
 
-function getCanonicalPostUrl(urlStr: string): string {
-  try {
-    const url = new URL(urlStr);
-    const pathParts = url.pathname.split("/").filter(Boolean);
-    if (pathParts.length >= 2) {
-      const type = pathParts[0]; // p, reel, tv
-      const shortcode = pathParts[1];
-      return `${url.origin}/${type}/${shortcode}/`;
-    }
-  } catch (e) {
-    // ignore
-  }
-  return urlStr.split("?")[0].replace(/\/?$/, "/");
-}
-
 async function fetchPostJson(url: string): Promise<any> {
-  const canonicalUrl = getCanonicalPostUrl(url);
-  const apiUrl = `${canonicalUrl}?__a=1&__d=dis`;
+  // Construct same-origin JSON API endpoint
+  const separator = url.includes("?") ? "&" : "?";
+  const apiUrl = url.endsWith("/") 
+    ? `${url.slice(0, -1)}${separator}__a=1&__d=dis`
+    : `${url}${separator}__a=1&__d=dis`;
 
   // 1. Try direct fetch in content script
   try {
@@ -255,11 +243,9 @@ async function fetchPostJson(url: string): Promise<any> {
 }
 
 async function fetchPostHtml(url: string): Promise<string> {
-  const canonicalUrl = getCanonicalPostUrl(url);
-
   // 1. Try fetching directly in the content script (Same-Origin path — carries cookies natively)
   try {
-    const resp = await fetch(canonicalUrl, { credentials: "include" });
+    const resp = await fetch(url, { credentials: "include" });
     if (resp.ok) {
       const text = await resp.text();
       // If we got redirected to login page, direct fetch didn't work (unauthenticated direct load)
@@ -274,7 +260,7 @@ async function fetchPostHtml(url: string): Promise<string> {
   // 2. Try fetching via background script (bypasses CSP)
   const response = await new Promise<ExtensionMessage>((resolve) => {
     chrome.runtime.sendMessage(
-      { type: "FETCH_URL_HTML", payload: canonicalUrl } as ExtensionMessage,
+      { type: "FETCH_URL_HTML", payload: url } as ExtensionMessage,
       (res) => resolve(res)
     );
   });
@@ -290,67 +276,6 @@ async function fetchPostHtml(url: string): Promise<string> {
   throw new Error("Failed to fetch page HTML via all methods.");
 }
 
-function getShortcodeFromUrl(urlStr: string): string | null {
-  try {
-    const parsed = new URL(urlStr);
-    const pathParts = parsed.pathname.split("/").filter(Boolean);
-    if (pathParts.length >= 2 && ["p", "reel", "tv"].includes(pathParts[0])) {
-      return pathParts[1];
-    }
-  } catch {}
-  return null;
-}
-
-const interceptedPosts = new Map<string, PostInfo>();
-
-// Listen for intercepted fetch calls from the page context
-window.addEventListener("message", (event) => {
-  if (event.source !== window) return;
-  if (event.data?.type === "INSTAGRAB_INTERCEPTED_DATA" && event.data.payload) {
-    try {
-      const currentUrl = window.location.href;
-      const postInfo = extractPostInfo([event.data.payload], currentUrl);
-      if (postInfo && postInfo.shortcode) {
-        interceptedPosts.set(postInfo.shortcode, postInfo);
-      }
-    } catch (e) {
-      // ignore
-    }
-  }
-});
-
-// Inject fetch interceptor immediately to capture GraphQL requests
-(function injectFetchInterceptor() {
-  try {
-    const code = `
-      (function() {
-        const originalFetch = window.fetch;
-        window.fetch = async function(...args) {
-          const response = await originalFetch.apply(this, args);
-          try {
-            const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
-            if (url.includes('/api/v1/') || url.includes('/graphql/query')) {
-              const clone = response.clone();
-              clone.json().then(data => {
-                if (data) {
-                  window.postMessage({ type: "INSTAGRAB_INTERCEPTED_DATA", payload: data }, "*");
-                }
-              }).catch(() => {});
-            }
-          } catch (e) {}
-          return response;
-        };
-      })();
-    `;
-    const script = document.createElement("script");
-    script.textContent = code;
-    (document.head || document.documentElement).appendChild(script);
-    script.remove();
-  } catch (err) {
-    console.error("InstaGrab: Failed to inject fetch interceptor:", err);
-  }
-})();
-
 chrome.runtime.onMessage.addListener(
   (message: ExtensionMessage, _sender, sendResponse) => {
     if (message.type !== "GET_POST_INFO") return;
@@ -365,28 +290,15 @@ chrome.runtime.onMessage.addListener(
     // Run async extraction to support fetching page HTML as fallback
     (async () => {
       try {
-        const shortcode = getShortcodeFromUrl(currentUrl);
+        // 1. Try local DOM scripts first (Fast Path)
+        const scriptElements = document.querySelectorAll('script[type="application/json"]');
+        const jsonScripts = Array.from(scriptElements)
+          .map((s) => s.textContent || "")
+          .filter((t) => t.trim().length > 0);
 
-        // 1. Try our captured/intercepted GraphQL/API cache (Zero network request, instant!)
-        let postInfo: PostInfo | null = null;
-        if (shortcode && interceptedPosts.has(shortcode)) {
-          postInfo = interceptedPosts.get(shortcode) || null;
-          if (postInfo) {
-            console.log("InstaGrab: Extracted post info from intercepted cache!");
-          }
-        }
+        let postInfo = extractPostInfo(jsonScripts, currentUrl);
 
-        // 2. Try local DOM scripts first (Fast Path)
-        if (!postInfo) {
-          const scriptElements = document.querySelectorAll('script[type="application/json"]');
-          const jsonScripts = Array.from(scriptElements)
-            .map((s) => s.textContent || "")
-            .filter((t) => t.trim().length > 0);
-
-          postInfo = extractPostInfo(jsonScripts, currentUrl);
-        }
-
-        // 3. Fallback: Request JSON API endpoint (API Path — highly reliable same-origin JSON)
+        // 2. Fallback: Request JSON API endpoint (API Path — highly reliable same-origin JSON)
         if (!postInfo) {
           try {
             const data = await fetchPostJson(currentUrl);
@@ -396,7 +308,7 @@ chrome.runtime.onMessage.addListener(
           }
         }
 
-        // 4. Fallback: Request page HTML and parse JSON scripts using robust regex matching
+        // 3. Fallback: Request page HTML and parse JSON scripts using robust regex matching
         if (!postInfo) {
           try {
             const htmlText = await fetchPostHtml(currentUrl);
@@ -419,7 +331,7 @@ chrome.runtime.onMessage.addListener(
           }
         }
 
-        // 5. Fallback: Parse the DOM elements directly (Super Fallback)
+        // 4. Fallback: Parse the DOM elements directly (Super Fallback)
         if (!postInfo) {
           console.log("InstaGrab: JSON extraction failed. Falling back to DOM scraping...");
           postInfo = extractFromDOM(currentUrl);
