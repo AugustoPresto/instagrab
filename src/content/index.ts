@@ -7,7 +7,6 @@ import { extractPostInfo } from "../shared/extractor";
  * with extracted media data.
  */
 
-let cachedPostInfo: PostInfo | null = null;
 
 function isPostUrl(url: string): boolean {
   try {
@@ -337,7 +336,6 @@ chrome.runtime.onMessage.addListener(
           postInfo = extractFromDOM(currentUrl);
         }
 
-        cachedPostInfo = postInfo;
         sendResponse({ type: "POST_INFO_RESULT", payload: postInfo });
       } catch (err) {
         sendResponse({ type: "ERROR", payload: String(err) });
@@ -353,7 +351,6 @@ let lastUrl = window.location.href;
 const observer = new MutationObserver(() => {
   if (window.location.href !== lastUrl) {
     lastUrl = window.location.href;
-    cachedPostInfo = null;
     chrome.runtime.sendMessage({ type: "GET_POST_INFO" }).catch(() => {
       // Popup may not be open — ignore
     });
