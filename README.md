@@ -115,7 +115,7 @@ pip install -r requirements.txt
 python -m cli.rename_ai ~/Downloads/InstaGrab --model sequential --prefix photo
 
 # Sequential rename starting at a custom index (e.g., 47)
-python -m cli.rename_ai ~/Downloads/InstaGrab --model sequential --prefix celle --start 47
+python -m cli.rename_ai ~/Downloads/InstaGrab --model sequential --prefix my_photo --start 47
 
 # AI rename with GPT-4o Vision (requires OpenAI API key)
 export OPENAI_API_KEY=sk-...
