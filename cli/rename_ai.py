@@ -47,6 +47,12 @@ Examples:
         help="Filename prefix for sequential mode (default: 'photo')",
     )
     parser.add_argument(
+        "--start",
+        type=int,
+        default=1,
+        help="Start index for sequential mode (default: 1)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Preview renames without making changes",
@@ -66,12 +72,13 @@ Examples:
 def rename_sequential(
     files: list[Path],
     prefix: str,
+    start: int,
     output_dir: Optional[Path],
     dry_run: bool,
 ) -> list[tuple[Path, Path]]:
     """Simple sequential rename: prefix1.jpg, prefix2.jpg, ..."""
     renames = []
-    for i, f in enumerate(sorted(files), start=1):
+    for i, f in enumerate(sorted(files), start=start):
         new_name = f"{prefix}{i}{f.suffix}"
         dest = (output_dir or f.parent) / new_name
         renames.append((f, dest))
@@ -290,7 +297,7 @@ def main() -> None:
 
     # Choose renaming strategy
     if args.model == "sequential":
-        renames = rename_sequential(files, args.prefix, output_dir, args.dry_run)
+        renames = rename_sequential(files, args.prefix, args.start, output_dir, args.dry_run)
 
     elif args.model == "gpt-4o":
         if not args.openai_key:
