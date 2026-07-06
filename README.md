@@ -114,6 +114,9 @@ pip install -r requirements.txt
 # Sequential rename: photo1.jpg, photo2.jpg, ...
 python -m cli.rename_ai ~/Downloads/InstaGrab --model sequential --prefix photo
 
+# Sequential rename starting at a custom index (e.g., 47)
+python -m cli.rename_ai ~/Downloads/InstaGrab --model sequential --prefix celle --start 47
+
 # AI rename with GPT-4o Vision (requires OpenAI API key)
 export OPENAI_API_KEY=sk-...
 python -m cli.rename_ai ~/Downloads/InstaGrab --model gpt-4o
@@ -132,7 +135,7 @@ python -m cli.rename_ai ~/Downloads/InstaGrab --model gpt-4o --output-dir ~/Desk
 
 | Model | Description | Requires |
 |---|---|---|
-| `sequential` | Simple numbered rename (`photo1.jpg`, etc.) | Nothing |
+| `sequential` | Simple numbered rename (`photo1.jpg`, etc.). Supports starting index via `--start`. | Nothing |
 | `gpt-4o` | GPT-4o Vision generates descriptive names (`sunset-beach-couple.jpg`) | OpenAI API key |
 | `clip` | Local CLIP model classifies images against tags (fully offline) | `torch`, `open_clip_torch` |
 
